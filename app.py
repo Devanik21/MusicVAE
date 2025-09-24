@@ -12,7 +12,7 @@ import librosa
 import tempfile
 import os
 
-# Set device
+# Set device 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 class MusicVAE(nn.Module):
