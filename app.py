@@ -108,7 +108,8 @@ def create_diverse_music_data(n_samples=2000, sequence_length=128):
             scale = [0, 2, 4, 5, 7, 9, 11]  # Major scale
             for note_idx in range(0, sequence_length, 8):
                 scale_note = scale[np.random.randint(0, len(scale))]
-                pattern[note_idx + scale_note] = np.random.uniform(0.5, 1.0)
+                if note_idx + scale_note < sequence_length:
+                    pattern[note_idx + scale_note] = np.random.uniform(0.5, 1.0)
                 
         elif style == 'harmonic':
             # Chord progressions
