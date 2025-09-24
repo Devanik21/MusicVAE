@@ -1,0 +1,6 @@
+streamlit 
+torch 
+numpy
+matplotlib
+scipy 
+librosa
