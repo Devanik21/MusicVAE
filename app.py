@@ -134,11 +134,17 @@ def music_to_audio(music_data, sample_rate=22050, duration=4):
     
     # Map each element in music_data to a frequency and add to audio
     base_freq = 220  # A3
+    segment_length = len(time) // len(music_data)
+    
     for i, intensity in enumerate(music_data):
         if intensity > 0.1:  # Only play notes above threshold
             freq = base_freq * (2 ** (i / 12))  # Chromatic scale
-            wave = intensity * np.sin(2 * np.pi * freq * time[:len(time)//len(music_data)])
-            audio[i*len(time)//len(music_data):(i+1)*len(time)//len(music_data)] += wave[:len(time)//len(music_data)]
+            start_idx = i * segment_length
+            end_idx = min((i + 1) * segment_length, len(time))
+            segment_time = time[start_idx:end_idx]
+            
+            wave = intensity * np.sin(2 * np.pi * freq * segment_time)
+            audio[start_idx:end_idx] += wave
     
     # Normalize
     if np.max(np.abs(audio)) > 0:
