@@ -74,15 +74,15 @@ class MusicVAE(nn.Module):
         z = self.reparameterize(mu, logvar, self.temperature)
         return self.decode(z), mu, logvar
 
-# ===== MODEL 2: Music Transformer =====
 class MusicTransformer(nn.Module):
     def __init__(self, input_dim=128, d_model=256, nhead=8, num_layers=6, latent_dim=64):
         super(MusicTransformer, self).__init__()
         self.d_model = d_model
         self.latent_dim = latent_dim
+        self.input_dim = input_dim
         
-        self.input_proj = nn.Linear(input_dim, d_model)
-        self.pos_encoding = nn.Parameter(torch.randn(1, 128, d_model))
+        self.input_proj = nn.Linear(1, d_model)  # Project each timestep to d_model
+        self.pos_encoding = nn.Parameter(torch.randn(1, input_dim, d_model))
         
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model, nhead=nhead, dim_feedforward=d_model*4,
@@ -99,27 +99,38 @@ class MusicTransformer(nn.Module):
         )
         self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers)
         
-        self.output_proj = nn.Linear(d_model, input_dim)
+        self.output_proj = nn.Linear(d_model, 1)
         
     def encode(self, x):
-        batch_size = x.shape[0]
-        x = self.input_proj(x.unsqueeze(-1)) + self.pos_encoding[:, :x.shape[1], :]
-        x = self.transformer_encoder(x.transpose(0, 1))
-        x = x.mean(dim=0)  # Global average pooling
-        latent_params = self.latent_proj(x)
+        batch_size, seq_len = x.shape
+        # Reshape to [batch, seq, 1] then project to [batch, seq, d_model]
+        x = x.unsqueeze(-1)  # [batch, seq, 1]
+        x = self.input_proj(x)  # [batch, seq, d_model]
+        x = x + self.pos_encoding[:, :seq_len, :]  # Add positional encoding
+        x = x.transpose(0, 1)  # [seq, batch, d_model] for transformer
+        x = self.transformer_encoder(x)
+        x = x.mean(dim=0)  # Global average pooling -> [batch, d_model]
+        latent_params = self.latent_proj(x)  # [batch, latent_dim * 2]
         mu, logvar = latent_params[:, :self.latent_dim], latent_params[:, self.latent_dim:]
         return mu, logvar
         
     def decode(self, z):
         batch_size = z.shape[0]
-        z = self.decoder_proj(z).unsqueeze(1).repeat(1, 128, 1)
-        z = z.transpose(0, 1)
-        memory = z
-        tgt = torch.zeros_like(z)
-        x = self.transformer_decoder(tgt, memory)
-        x = x.transpose(0, 1)  # [batch, seq, features]
-        x = self.output_proj(x)  # [batch, seq, input_dim]
-        return torch.sigmoid(x.view(batch_size, -1))
+        # Project latent to d_model and create sequence
+        z_proj = self.decoder_proj(z)  # [batch, d_model]
+        z_seq = z_proj.unsqueeze(1).repeat(1, self.input_dim, 1)  # [batch, seq, d_model]
+        
+        # Prepare for transformer decoder
+        memory = z_seq.transpose(0, 1)  # [seq, batch, d_model]
+        tgt = torch.zeros_like(memory)  # [seq, batch, d_model]
+        
+        # Decode
+        x = self.transformer_decoder(tgt, memory)  # [seq, batch, d_model]
+        x = x.transpose(0, 1)  # [batch, seq, d_model]
+        x = self.output_proj(x)  # [batch, seq, 1]
+        x = x.squeeze(-1)  # [batch, seq]
+        
+        return torch.sigmoid(x)
         
     def reparameterize(self, mu, logvar):
         std = torch.exp(0.5 * logvar)
