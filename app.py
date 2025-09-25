@@ -465,7 +465,7 @@ def music_to_audio(music_data, sample_rate=22050, duration=6):
 
 def main():
     st.title("🎵 Multi-Model Music Generator")
-    st.write("Choose from 5 different AI models to generate music")
+    st.write("Choose from 4 different AI models to generate music")
     
     # Model selection
     model_choice = st.selectbox(
