@@ -74,74 +74,7 @@ class MusicVAE(nn.Module):
         z = self.reparameterize(mu, logvar, self.temperature)
         return self.decode(z), mu, logvar
 
-class MusicTransformer(nn.Module):
-    def __init__(self, input_dim=128, d_model=256, nhead=8, num_layers=6, latent_dim=64):
-        super(MusicTransformer, self).__init__()
-        self.d_model = d_model
-        self.latent_dim = latent_dim
-        self.input_dim = input_dim
-        
-        self.input_proj = nn.Linear(1, d_model)  # Project each timestep to d_model
-        self.pos_encoding = nn.Parameter(torch.randn(1, input_dim, d_model))
-        
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d_model, nhead=nhead, dim_feedforward=d_model*4,
-            dropout=0.1, activation='gelu'
-        )
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers)
-        
-        self.latent_proj = nn.Linear(d_model, latent_dim * 2)  # mu and logvar
-        self.decoder_proj = nn.Linear(latent_dim, d_model)
-        
-        decoder_layer = nn.TransformerDecoderLayer(
-            d_model=d_model, nhead=nhead, dim_feedforward=d_model*4,
-            dropout=0.1, activation='gelu'
-        )
-        self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers)
-        
-        self.output_proj = nn.Linear(d_model, 1)
-        
-    def encode(self, x):
-        batch_size, seq_len = x.shape
-        # Reshape to [batch, seq, 1] then project to [batch, seq, d_model]
-        x = x.unsqueeze(-1)  # [batch, seq, 1]
-        x = self.input_proj(x)  # [batch, seq, d_model]
-        x = x + self.pos_encoding[:, :seq_len, :]  # Add positional encoding
-        x = x.transpose(0, 1)  # [seq, batch, d_model] for transformer
-        x = self.transformer_encoder(x)
-        x = x.mean(dim=0)  # Global average pooling -> [batch, d_model]
-        latent_params = self.latent_proj(x)  # [batch, latent_dim * 2]
-        mu, logvar = latent_params[:, :self.latent_dim], latent_params[:, self.latent_dim:]
-        return mu, logvar
-        
-    def decode(self, z):
-        batch_size = z.shape[0]
-        # Project latent to d_model and create sequence
-        z_proj = self.decoder_proj(z)  # [batch, d_model]
-        z_seq = z_proj.unsqueeze(1).repeat(1, self.input_dim, 1)  # [batch, seq, d_model]
-        
-        # Prepare for transformer decoder
-        memory = z_seq.transpose(0, 1)  # [seq, batch, d_model]
-        tgt = torch.zeros_like(memory)  # [seq, batch, d_model]
-        
-        # Decode
-        x = self.transformer_decoder(tgt, memory)  # [seq, batch, d_model]
-        x = x.transpose(0, 1)  # [batch, seq, d_model]
-        x = self.output_proj(x)  # [batch, seq, 1]
-        x = x.squeeze(-1)  # [batch, seq]
-        
-        return torch.sigmoid(x)
-        
-    def reparameterize(self, mu, logvar):
-        std = torch.exp(0.5 * logvar)
-        eps = torch.randn_like(std)
-        return mu + eps * std
-        
-    def forward(self, x):
-        mu, logvar = self.encode(x)
-        z = self.reparameterize(mu, logvar)
-        decoded = self.decode(z)
-        return decoded, mu, logvar
+
 
 # ===== MODEL 3: Music GAN =====
 class MusicGenerator(nn.Module):
@@ -537,13 +470,13 @@ def main():
     # Model selection
     model_choice = st.selectbox(
         "Choose Model Architecture",
-        ["MusicVAE", "MusicTransformer", "MusicGAN", "MusicRNN", "MusicDiffusion"]
+        ["MusicVAE","MusicGAN", "MusicRNN", "MusicDiffusion"]
     )
     
     st.sidebar.header(f"{model_choice} Parameters")
     
     # Model-specific parameters
-    if model_choice in ["MusicVAE", "MusicTransformer", "MusicRNN"]:
+    if model_choice in ["MusicVAE", "MusicRNN"]:
         latent_dim = st.sidebar.slider("Latent Dimension", 16, 128, 64)
         temperature = st.sidebar.slider("Generation Temperature", 0.1, 2.0, 1.0)
     elif model_choice == "MusicGAN":
@@ -589,8 +522,7 @@ def main():
                 # Initialize model
                 if model_choice == "MusicVAE":
                     model = MusicVAE(128, hidden_dim, latent_dim, 3)
-                elif model_choice == "MusicTransformer":
-                    model = MusicTransformer(128, hidden_dim, 8, 4, latent_dim)
+                
                 elif model_choice == "MusicGAN":
                     model = MusicGAN(latent_dim, hidden_dim, 128)
                 elif model_choice == "MusicRNN":
@@ -638,7 +570,7 @@ def main():
                     
                     # Generate
                     kwargs = {}
-                    if model_choice in ["MusicVAE", "MusicTransformer", "MusicRNN"]:
+                    if model_choice in ["MusicVAE", "MusicRNN"]:
                         kwargs = {'latent_dim': latent_dim, 'temperature': temperature}
                     
                     generated_music = generate_music(model, model_type, num_generations, **kwargs)
