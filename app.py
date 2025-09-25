@@ -12,11 +12,11 @@ from scipy.io.wavfile import write
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+# ===== MODEL 1: MusicVAE =====
 class MusicVAE(nn.Module):
     def __init__(self, input_dim=128, hidden_dim=512, latent_dim=64, num_layers=3):
         super(MusicVAE, self).__init__()
         
-        # Hierarchical encoder with residual connections
         encoder_layers = []
         curr_dim = input_dim
         
@@ -31,13 +31,10 @@ class MusicVAE(nn.Module):
             hidden_dim = hidden_dim // 2
         
         self.encoder = nn.Sequential(*encoder_layers)
-        
-        # Latent space with better regularization
         final_dim = curr_dim
         self.mu = nn.Linear(final_dim, latent_dim)
         self.logvar = nn.Linear(final_dim, latent_dim)
         
-        # Hierarchical decoder with skip connections
         decoder_layers = []
         curr_dim = latent_dim
         hidden_dim = 128
@@ -58,8 +55,6 @@ class MusicVAE(nn.Module):
         ])
         
         self.decoder = nn.Sequential(*decoder_layers)
-        
-        # Temperature parameter for controlled sampling
         self.temperature = nn.Parameter(torch.ones(1))
         
     def encode(self, x):
@@ -79,17 +74,221 @@ class MusicVAE(nn.Module):
         z = self.reparameterize(mu, logvar, self.temperature)
         return self.decode(z), mu, logvar
 
-def advanced_vae_loss(recon_x, x, mu, logvar, beta=1.0):
-    """Beta-VAE loss with annealing"""
-    recon_loss = F.binary_cross_entropy(recon_x, x, reduction='sum')
-    kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-    return recon_loss + beta * kl_loss
+# ===== MODEL 2: Music Transformer =====
+class MusicTransformer(nn.Module):
+    def __init__(self, input_dim=128, d_model=256, nhead=8, num_layers=6, latent_dim=64):
+        super(MusicTransformer, self).__init__()
+        self.d_model = d_model
+        self.latent_dim = latent_dim
+        
+        self.input_proj = nn.Linear(input_dim, d_model)
+        self.pos_encoding = nn.Parameter(torch.randn(1, 128, d_model))
+        
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model, nhead=nhead, dim_feedforward=d_model*4,
+            dropout=0.1, activation='gelu'
+        )
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers)
+        
+        self.latent_proj = nn.Linear(d_model, latent_dim * 2)  # mu and logvar
+        self.decoder_proj = nn.Linear(latent_dim, d_model)
+        
+        decoder_layer = nn.TransformerDecoderLayer(
+            d_model=d_model, nhead=nhead, dim_feedforward=d_model*4,
+            dropout=0.1, activation='gelu'
+        )
+        self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers)
+        
+        self.output_proj = nn.Linear(d_model, input_dim)
+        
+    def encode(self, x):
+        x = self.input_proj(x.unsqueeze(1)) + self.pos_encoding
+        x = self.transformer_encoder(x.transpose(0, 1))
+        x = x.mean(dim=0)  # Global average pooling
+        latent_params = self.latent_proj(x)
+        mu, logvar = latent_params[:, :self.latent_dim], latent_params[:, self.latent_dim:]
+        return mu, logvar
+        
+    def decode(self, z):
+        z = self.decoder_proj(z).unsqueeze(1).repeat(1, 128, 1)
+        z = z.transpose(0, 1)
+        memory = z
+        tgt = torch.zeros_like(z)
+        x = self.transformer_decoder(tgt, memory)
+        x = x.transpose(0, 1).squeeze(1)
+        return torch.sigmoid(self.output_proj(x))
+        
+    def reparameterize(self, mu, logvar):
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+        
+    def forward(self, x):
+        mu, logvar = self.encode(x)
+        z = self.reparameterize(mu, logvar)
+        return self.decode(z), mu, logvar
+
+# ===== MODEL 3: Music GAN =====
+class MusicGenerator(nn.Module):
+    def __init__(self, latent_dim=100, hidden_dim=256, output_dim=128):
+        super(MusicGenerator, self).__init__()
+        self.net = nn.Sequential(
+            nn.Linear(latent_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
+            nn.ReLU(True),
+            nn.Linear(hidden_dim, hidden_dim * 2),
+            nn.BatchNorm1d(hidden_dim * 2),
+            nn.ReLU(True),
+            nn.Linear(hidden_dim * 2, hidden_dim * 4),
+            nn.BatchNorm1d(hidden_dim * 4),
+            nn.ReLU(True),
+            nn.Linear(hidden_dim * 4, output_dim),
+            nn.Tanh()
+        )
+        
+    def forward(self, z):
+        return self.net(z)
+
+class MusicDiscriminator(nn.Module):
+    def __init__(self, input_dim=128, hidden_dim=256):
+        super(MusicDiscriminator, self).__init__()
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Dropout(0.3),
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Dropout(0.3),
+            nn.Linear(hidden_dim // 2, 1),
+            nn.Sigmoid()
+        )
+        
+    def forward(self, x):
+        return self.net(x)
+
+class MusicGAN(nn.Module):
+    def __init__(self, latent_dim=100, hidden_dim=256, output_dim=128):
+        super(MusicGAN, self).__init__()
+        self.generator = MusicGenerator(latent_dim, hidden_dim, output_dim)
+        self.discriminator = MusicDiscriminator(output_dim, hidden_dim)
+        self.latent_dim = latent_dim
+        
+    def generate(self, batch_size=1):
+        z = torch.randn(batch_size, self.latent_dim).to(device)
+        return self.generator(z)
+
+# ===== MODEL 4: Music RNN =====
+class MusicRNN(nn.Module):
+    def __init__(self, input_dim=128, hidden_dim=256, num_layers=3, latent_dim=64):
+        super(MusicRNN, self).__init__()
+        self.hidden_dim = hidden_dim
+        self.num_layers = num_layers
+        self.latent_dim = latent_dim
+        
+        self.encoder_rnn = nn.LSTM(1, hidden_dim, num_layers, batch_first=True, dropout=0.2)
+        self.decoder_rnn = nn.LSTM(latent_dim, hidden_dim, num_layers, batch_first=True, dropout=0.2)
+        
+        self.mu_proj = nn.Linear(hidden_dim, latent_dim)
+        self.logvar_proj = nn.Linear(hidden_dim, latent_dim)
+        self.output_proj = nn.Linear(hidden_dim, 1)
+        
+    def encode(self, x):
+        x = x.unsqueeze(-1)  # Add feature dimension
+        _, (hidden, _) = self.encoder_rnn(x)
+        hidden = hidden[-1]  # Take last layer
+        mu = self.mu_proj(hidden)
+        logvar = self.logvar_proj(hidden)
+        return mu, logvar
+        
+    def decode(self, z):
+        z = z.unsqueeze(1).repeat(1, 128, 1)  # Repeat for sequence length
+        output, _ = self.decoder_rnn(z)
+        return torch.sigmoid(self.output_proj(output).squeeze(-1))
+        
+    def reparameterize(self, mu, logvar):
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+        
+    def forward(self, x):
+        mu, logvar = self.encode(x)
+        z = self.reparameterize(mu, logvar)
+        return self.decode(z), mu, logvar
+
+# ===== MODEL 5: Music Diffusion =====
+class MusicDiffusion(nn.Module):
+    def __init__(self, input_dim=128, hidden_dim=256, timesteps=1000):
+        super(MusicDiffusion, self).__init__()
+        self.timesteps = timesteps
+        
+        self.noise_predictor = nn.Sequential(
+            nn.Linear(input_dim + 1, hidden_dim),  # +1 for timestep
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim * 2),
+            nn.ReLU(),
+            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, input_dim)
+        )
+        
+        # Beta schedule for noise
+        self.register_buffer('betas', torch.linspace(0.0001, 0.02, timesteps))
+        self.register_buffer('alphas', 1.0 - self.betas)
+        self.register_buffer('alphas_cumprod', torch.cumprod(self.alphas, dim=0))
+        
+    def forward_diffusion(self, x, t):
+        noise = torch.randn_like(x)
+        sqrt_alphas_cumprod = torch.sqrt(self.alphas_cumprod[t])
+        sqrt_one_minus_alphas_cumprod = torch.sqrt(1.0 - self.alphas_cumprod[t])
+        
+        return (sqrt_alphas_cumprod * x + sqrt_one_minus_alphas_cumprod * noise), noise
+    
+    def forward(self, x):
+        batch_size = x.shape[0]
+        t = torch.randint(0, self.timesteps, (batch_size,)).to(device)
+        
+        x_noisy, noise = self.forward_diffusion(x, t)
+        
+        # Predict noise
+        t_normalized = t.float() / self.timesteps
+        x_with_time = torch.cat([x_noisy, t_normalized.unsqueeze(-1)], dim=-1)
+        predicted_noise = self.noise_predictor(x_with_time)
+        
+        return predicted_noise, noise
+    
+    def sample(self, batch_size=1):
+        x = torch.randn(batch_size, 128).to(device)
+        
+        for t in reversed(range(self.timesteps)):
+            if t > 0:
+                noise = torch.randn_like(x)
+            else:
+                noise = torch.zeros_like(x)
+                
+            t_tensor = torch.full((batch_size,), t).to(device)
+            t_normalized = t_tensor.float() / self.timesteps
+            x_with_time = torch.cat([x, t_normalized.unsqueeze(-1)], dim=-1)
+            
+            predicted_noise = self.noise_predictor(x_with_time)
+            
+            alpha = self.alphas[t]
+            alpha_cumprod = self.alphas_cumprod[t]
+            beta = self.betas[t]
+            
+            if t > 0:
+                alpha_cumprod_prev = self.alphas_cumprod[t-1]
+            else:
+                alpha_cumprod_prev = torch.tensor(1.0)
+                
+            x = (1/torch.sqrt(alpha)) * (x - ((1-alpha)/torch.sqrt(1-alpha_cumprod)) * predicted_noise)
+            if t > 0:
+                x += torch.sqrt(beta) * noise
+                
+        return torch.sigmoid(x)
 
 def create_diverse_music_data(n_samples=2000, sequence_length=128):
-    """Create more diverse and structured music data"""
+    """Create diverse music data with multiple styles"""
     data = []
-    
-    # Different musical styles/patterns
     styles = ['rhythmic', 'melodic', 'harmonic', 'ambient', 'percussive']
     
     for i in range(n_samples):
@@ -97,22 +296,19 @@ def create_diverse_music_data(n_samples=2000, sequence_length=128):
         style = styles[i % len(styles)]
         
         if style == 'rhythmic':
-            # Strong rhythmic patterns
             for beat in range(0, sequence_length, 4):
                 pattern[beat] = 1.0
                 if beat + 2 < sequence_length:
                     pattern[beat + 2] = 0.7
                     
         elif style == 'melodic':
-            # Melodic sequences with scales
-            scale = [0, 2, 4, 5, 7, 9, 11]  # Major scale
+            scale = [0, 2, 4, 5, 7, 9, 11]
             for note_idx in range(0, sequence_length, 8):
                 scale_note = scale[np.random.randint(0, len(scale))]
                 if note_idx + scale_note < sequence_length:
                     pattern[note_idx + scale_note] = np.random.uniform(0.5, 1.0)
-                
+                    
         elif style == 'harmonic':
-            # Chord progressions
             chords = [[0, 4, 7], [5, 9, 12], [7, 11, 14], [2, 5, 9]]
             for chord_idx in range(0, sequence_length, 32):
                 chord = chords[np.random.randint(0, len(chords))]
@@ -121,13 +317,12 @@ def create_diverse_music_data(n_samples=2000, sequence_length=128):
                         pattern[chord_idx + note] = np.random.uniform(0.6, 0.9)
                         
         elif style == 'ambient':
-            # Sustained notes with variation
             for i in range(sequence_length):
                 if np.random.random() > 0.8:
-                    pattern[i:i+8] = np.random.uniform(0.3, 0.6)
+                    end_idx = min(i + 8, sequence_length)
+                    pattern[i:end_idx] = np.random.uniform(0.3, 0.6)
                     
         elif style == 'percussive':
-            # Complex drum patterns
             for beat in [0, 6, 12, 18, 24, 30]:
                 if beat < sequence_length:
                     pattern[beat] = 1.0
@@ -135,15 +330,22 @@ def create_diverse_music_data(n_samples=2000, sequence_length=128):
                 if snare < sequence_length:
                     pattern[snare] = 0.8
         
-        # Add variation and noise
         pattern += np.random.normal(0, 0.05, sequence_length)
         pattern = np.clip(pattern, 0, 1)
-        
         data.append(pattern)
     
     return np.array(data, dtype=np.float32)
 
-def train_advanced_vae(model, train_loader, epochs=100):
+def train_model(model, model_type, train_loader, epochs=100):
+    """Universal training function for all models"""
+    if model_type == 'GAN':
+        return train_gan(model, train_loader, epochs)
+    elif model_type == 'Diffusion':
+        return train_diffusion(model, train_loader, epochs)
+    else:
+        return train_vae_style(model, train_loader, epochs)
+
+def train_vae_style(model, train_loader, epochs=100):
     optimizer = optim.AdamW(model.parameters(), lr=2e-4, weight_decay=1e-5)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, epochs)
     
@@ -153,14 +355,17 @@ def train_advanced_vae(model, train_loader, epochs=100):
     
     for epoch in range(epochs):
         total_loss = 0
-        beta = min(1.0, epoch / (epochs * 0.5))  # Beta annealing
+        beta = min(1.0, epoch / (epochs * 0.5))
         
         for batch_idx, (data,) in enumerate(train_loader):
             data = data.to(device)
             optimizer.zero_grad()
             
             recon_batch, mu, logvar = model(data)
-            loss = advanced_vae_loss(recon_batch, data, mu, logvar, beta)
+            
+            recon_loss = F.binary_cross_entropy(recon_batch, data, reduction='sum')
+            kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+            loss = recon_loss + beta * kl_loss
             
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -174,61 +379,136 @@ def train_advanced_vae(model, train_loader, epochs=100):
         progress_bar.progress((epoch + 1) / epochs)
         
         if epoch % 20 == 0:
-            st.write(f'Epoch {epoch}, Loss: {avg_loss:.4f}, Beta: {beta:.3f}')
+            st.write(f'Epoch {epoch}, Loss: {avg_loss:.4f}')
     
     return loss_history
 
-def generate_music_with_control(model, latent_dim=64, num_samples=1, temperature=1.0, interpolate=False):
+def train_gan(model, train_loader, epochs=100):
+    g_optimizer = optim.Adam(model.generator.parameters(), lr=2e-4, betas=(0.5, 0.999))
+    d_optimizer = optim.Adam(model.discriminator.parameters(), lr=2e-4, betas=(0.5, 0.999))
+    
+    progress_bar = st.progress(0)
+    g_losses, d_losses = [], []
+    
+    for epoch in range(epochs):
+        g_loss_total, d_loss_total = 0, 0
+        
+        for batch_idx, (real_data,) in enumerate(train_loader):
+            real_data = real_data.to(device)
+            batch_size = real_data.size(0)
+            
+            # Train Discriminator
+            d_optimizer.zero_grad()
+            real_labels = torch.ones(batch_size, 1).to(device)
+            fake_labels = torch.zeros(batch_size, 1).to(device)
+            
+            real_output = model.discriminator(real_data)
+            d_real_loss = F.binary_cross_entropy(real_output, real_labels)
+            
+            fake_data = model.generate(batch_size)
+            fake_output = model.discriminator(fake_data.detach())
+            d_fake_loss = F.binary_cross_entropy(fake_output, fake_labels)
+            
+            d_loss = d_real_loss + d_fake_loss
+            d_loss.backward()
+            d_optimizer.step()
+            
+            # Train Generator
+            g_optimizer.zero_grad()
+            fake_output = model.discriminator(fake_data)
+            g_loss = F.binary_cross_entropy(fake_output, real_labels)
+            g_loss.backward()
+            g_optimizer.step()
+            
+            g_loss_total += g_loss.item()
+            d_loss_total += d_loss.item()
+        
+        g_losses.append(g_loss_total / len(train_loader))
+        d_losses.append(d_loss_total / len(train_loader))
+        progress_bar.progress((epoch + 1) / epochs)
+        
+        if epoch % 20 == 0:
+            st.write(f'Epoch {epoch}, G Loss: {g_losses[-1]:.4f}, D Loss: {d_losses[-1]:.4f}')
+    
+    return g_losses, d_losses
+
+def train_diffusion(model, train_loader, epochs=100):
+    optimizer = optim.AdamW(model.parameters(), lr=1e-4)
+    
+    progress_bar = st.progress(0)
+    loss_history = []
+    
+    for epoch in range(epochs):
+        total_loss = 0
+        
+        for batch_idx, (data,) in enumerate(train_loader):
+            data = data.to(device)
+            optimizer.zero_grad()
+            
+            predicted_noise, actual_noise = model(data)
+            loss = F.mse_loss(predicted_noise, actual_noise)
+            
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+        
+        avg_loss = total_loss / len(train_loader.dataset)
+        loss_history.append(avg_loss)
+        progress_bar.progress((epoch + 1) / epochs)
+        
+        if epoch % 20 == 0:
+            st.write(f'Epoch {epoch}, Loss: {avg_loss:.4f}')
+    
+    return loss_history
+
+def generate_music(model, model_type, num_samples=1, **kwargs):
+    """Universal generation function"""
     model.eval()
     with torch.no_grad():
-        if interpolate:
-            # Generate interpolation between two points
-            z1 = torch.randn(1, latent_dim).to(device)
-            z2 = torch.randn(1, latent_dim).to(device)
-            alphas = torch.linspace(0, 1, num_samples).unsqueeze(1).to(device)
-            z = alphas * z2 + (1 - alphas) * z1
-        else:
+        if model_type == 'GAN':
+            return model.generate(num_samples).cpu().numpy()
+        elif model_type == 'Diffusion':
+            return model.sample(num_samples).cpu().numpy()
+        else:  # VAE-style models
+            latent_dim = kwargs.get('latent_dim', 64)
+            temperature = kwargs.get('temperature', 1.0)
+            
             z = torch.randn(num_samples, latent_dim).to(device) * temperature
-        
-        generated = model.decode(z).cpu().numpy()
-    return generated
+            if hasattr(model, 'decode'):
+                generated = model.decode(z).cpu().numpy()
+            else:
+                generated, _, _ = model(torch.zeros(num_samples, 128).to(device))
+                generated = generated.cpu().numpy()
+            return generated
 
 def music_to_audio(music_data, sample_rate=22050, duration=6):
-    """Enhanced audio conversion with multiple voices"""
+    """Convert music data to audio"""
     time = np.linspace(0, duration, int(sample_rate * duration))
     audio = np.zeros_like(time)
     
-    # Multiple frequency ranges for richer sound
-    base_freqs = [110, 220, 440, 880]  # Bass, Low, Mid, High
+    base_freqs = [110, 220, 440, 880]
     segment_length = len(time) // len(music_data)
     
     for i, intensity in enumerate(music_data):
         if intensity > 0.05:
-            # Choose frequency range based on position
             freq_range_idx = i % len(base_freqs)
             base_freq = base_freqs[freq_range_idx]
-            
-            # Add harmonics for richer sound
-            freq = base_freq * (2 ** ((i % 24) / 12))  # Two octave range
+            freq = base_freq * (2 ** ((i % 24) / 12))
             
             start_idx = i * segment_length
             end_idx = min((i + 1) * segment_length, len(time))
             segment_time = time[start_idx:end_idx]
             
-            # Create wave with harmonics
             wave = intensity * (
                 np.sin(2 * np.pi * freq * segment_time) +
                 0.3 * np.sin(2 * np.pi * freq * 2 * segment_time) +
                 0.1 * np.sin(2 * np.pi * freq * 3 * segment_time)
             )
             
-            # Apply envelope
             envelope = np.exp(-segment_time * 2)
             wave *= envelope
-            
             audio[start_idx:end_idx] += wave
     
-    # Apply soft clipping and normalize
     audio = np.tanh(audio)
     if np.max(np.abs(audio)) > 0:
         audio = audio / np.max(np.abs(audio)) * 0.7
@@ -236,94 +516,117 @@ def music_to_audio(music_data, sample_rate=22050, duration=6):
     return (audio * 32767).astype(np.int16)
 
 def main():
-    st.title("🎵 Advanced MusicVAE Generator")
-    st.write("Advanced VAE with hierarchical architecture and diverse training data")
+    st.title("🎵 Multi-Model Music Generator")
+    st.write("Choose from 5 different AI models to generate music")
     
-    # Advanced parameters
-    st.sidebar.header("Advanced Parameters")
-    latent_dim = st.sidebar.slider("Latent Dimension", 16, 128, 64)
-    hidden_dim = st.sidebar.slider("Hidden Dimension", 256, 1024, 512)
-    num_layers = st.sidebar.slider("Network Layers", 2, 5, 3)
-    epochs = st.sidebar.slider("Training Epochs", 50, 200, 100)
-    temperature = st.sidebar.slider("Generation Temperature", 0.1, 2.0, 1.0)
+    # Model selection
+    model_choice = st.selectbox(
+        "Choose Model Architecture",
+        ["MusicVAE", "MusicTransformer", "MusicGAN", "MusicRNN", "MusicDiffusion"]
+    )
+    
+    st.sidebar.header(f"{model_choice} Parameters")
+    
+    # Model-specific parameters
+    if model_choice in ["MusicVAE", "MusicTransformer", "MusicRNN"]:
+        latent_dim = st.sidebar.slider("Latent Dimension", 16, 128, 64)
+        temperature = st.sidebar.slider("Generation Temperature", 0.1, 2.0, 1.0)
+    elif model_choice == "MusicGAN":
+        latent_dim = st.sidebar.slider("Noise Dimension", 50, 200, 100)
+    elif model_choice == "MusicDiffusion":
+        timesteps = st.sidebar.slider("Diffusion Steps", 100, 1000, 500)
+    
+    hidden_dim = st.sidebar.slider("Hidden Dimension", 128, 512, 256)
+    epochs = st.sidebar.slider("Training Epochs", 30, 150, 80)
     
     # Initialize session state
-    if 'advanced_model' not in st.session_state:
-        st.session_state.advanced_model = None
-    if 'advanced_trained' not in st.session_state:
-        st.session_state.advanced_trained = False
+    model_key = f'{model_choice.lower()}_model'
+    trained_key = f'{model_choice.lower()}_trained'
+    
+    if model_key not in st.session_state:
+        st.session_state[model_key] = None
+    if trained_key not in st.session_state:
+        st.session_state[trained_key] = False
     
     col1, col2 = st.columns(2)
     
     with col1:
-        st.header("Training")
+        st.header(f"Train {model_choice}")
         
-        if st.button("Train Advanced Model"):
-            with st.spinner("Training Advanced MusicVAE..."):
-                # Create diverse synthetic data
-                music_data = create_diverse_music_data(n_samples=2000, sequence_length=128)
-                
-                # Show data diversity
-                fig, axes = plt.subplots(2, 3, figsize=(12, 6))
-                for i in range(6):
-                    axes[i//3, i%3].plot(music_data[i*300])
-                    axes[i//3, i%3].set_title(f'Style {i+1}')
-                st.pyplot(fig)
-                
-                # Create data loader
+        # Model info
+        model_descriptions = {
+            "MusicVAE": "Variational Autoencoder with hierarchical architecture for learning musical latent representations",
+            "MusicTransformer": "Transformer-based model using self-attention for capturing long-range musical dependencies",
+            "MusicGAN": "Generative Adversarial Network with generator and discriminator for realistic music synthesis",
+            "MusicRNN": "Recurrent Neural Network using LSTM layers for sequential music pattern modeling",
+            "MusicDiffusion": "Denoising diffusion model for high-quality music generation through iterative refinement"
+        }
+        
+        st.info(model_descriptions[model_choice])
+        
+        if st.button(f"Train {model_choice}"):
+            with st.spinner(f"Training {model_choice}..."):
+                # Create data
+                music_data = create_diverse_music_data(n_samples=1500, sequence_length=128)
                 dataset = TensorDataset(torch.tensor(music_data))
-                train_loader = DataLoader(dataset, batch_size=64, shuffle=True)
+                train_loader = DataLoader(dataset, batch_size=32, shuffle=True)
                 
-                # Initialize advanced model
-                model = MusicVAE(
-                    input_dim=128, 
-                    hidden_dim=hidden_dim, 
-                    latent_dim=latent_dim,
-                    num_layers=num_layers
-                )
+                # Initialize model
+                if model_choice == "MusicVAE":
+                    model = MusicVAE(128, hidden_dim, latent_dim, 3)
+                elif model_choice == "MusicTransformer":
+                    model = MusicTransformer(128, hidden_dim, 8, 4, latent_dim)
+                elif model_choice == "MusicGAN":
+                    model = MusicGAN(latent_dim, hidden_dim, 128)
+                elif model_choice == "MusicRNN":
+                    model = MusicRNN(128, hidden_dim, 3, latent_dim)
+                elif model_choice == "MusicDiffusion":
+                    model = MusicDiffusion(128, hidden_dim, timesteps if 'timesteps' in locals() else 500)
+                
                 model.to(device)
                 
                 # Train model
-                loss_history = train_advanced_vae(model, train_loader, epochs)
+                model_type = model_choice.replace('Music', '')
+                loss_history = train_model(model, model_type, train_loader, epochs)
                 
-                # Store in session state
-                st.session_state.advanced_model = model
-                st.session_state.advanced_trained = True
+                # Store model
+                st.session_state[model_key] = model
+                st.session_state[trained_key] = True
                 
-                # Plot training metrics
-                fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
-                ax1.plot(loss_history)
-                ax1.set_xlabel('Epoch')
-                ax1.set_ylabel('Loss')
-                ax1.set_title('Training Loss')
-                
-                # Show loss improvement
-                if len(loss_history) > 20:
-                    improvement = loss_history[0] - loss_history[-1]
-                    ax2.bar(['Initial', 'Final'], [loss_history[0], loss_history[-1]])
-                    ax2.set_title(f'Loss Improvement: {improvement:.2f}')
-                
+                # Plot results
+                fig, ax = plt.subplots(figsize=(10, 4))
+                if model_choice == "MusicGAN":
+                    ax.plot(loss_history[0], label='Generator Loss')
+                    ax.plot(loss_history[1], label='Discriminator Loss')
+                    ax.legend()
+                else:
+                    ax.plot(loss_history, label='Training Loss')
+                ax.set_xlabel('Epoch')
+                ax.set_ylabel('Loss')
+                ax.set_title(f'{model_choice} Training Progress')
                 st.pyplot(fig)
-                st.success(f"Advanced model trained! Final loss: {loss_history[-1]:.4f}")
+                
+                final_loss = loss_history[0][-1] if model_choice == "MusicGAN" else loss_history[-1]
+                st.success(f"{model_choice} trained! Final loss: {final_loss:.4f}")
     
     with col2:
-        st.header("Generation")
+        st.header(f"Generate with {model_choice}")
         
-        if st.session_state.advanced_trained and st.session_state.advanced_model is not None:
-            prompt = st.text_input("Style Prompt", "Melodic ambient sequence")
-            interpolate = st.checkbox("Interpolate between styles")
-            num_generations = st.slider("Number of generations", 1, 5, 1)
+        if st.session_state[trained_key] and st.session_state[model_key] is not None:
+            prompt = st.text_input("Style Description", f"{model_choice} generated music")
+            num_generations = st.slider("Number of Generations", 1, 3, 1)
             
             if st.button("Generate Music"):
-                with st.spinner("Generating advanced music..."):
-                    # Generate music with controls
-                    generated_music = generate_music_with_control(
-                        st.session_state.advanced_model, 
-                        latent_dim=latent_dim, 
-                        num_samples=num_generations,
-                        temperature=temperature,
-                        interpolate=interpolate
-                    )
+                with st.spinner("Generating music..."):
+                    model = st.session_state[model_key]
+                    model_type = model_choice.replace('Music', '')
+                    
+                    # Generate
+                    kwargs = {}
+                    if model_choice in ["MusicVAE", "MusicTransformer", "MusicRNN"]:
+                        kwargs = {'latent_dim': latent_dim, 'temperature': temperature}
+                    
+                    generated_music = generate_music(model, model_type, num_generations, **kwargs)
                     
                     for i, music_sequence in enumerate(generated_music):
                         st.subheader(f"Generation {i+1}")
@@ -334,7 +637,6 @@ def main():
                         ax1.set_title(f'{prompt} - Sequence {i+1}')
                         ax1.set_ylabel('Intensity')
                         
-                        # Show frequency spectrum
                         spectrum = np.abs(np.fft.fft(music_sequence))[:64]
                         ax2.plot(spectrum)
                         ax2.set_title('Frequency Spectrum')
@@ -346,7 +648,6 @@ def main():
                         # Convert to audio
                         audio_data = music_to_audio(music_sequence)
                         
-                        # Save and play
                         with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
                             write(tmp_file.name, 22050, audio_data)
                             
@@ -355,27 +656,85 @@ def main():
                             
                             st.audio(audio_bytes, format='audio/wav')
                             st.download_button(
-                                label=f"Download Audio {i+1}",
+                                label=f"Download {model_choice} Audio {i+1}",
                                 data=audio_bytes,
-                                file_name=f"advanced_music_{i+1}.wav",
+                                file_name=f"{model_choice.lower()}_music_{i+1}.wav",
                                 mime="audio/wav",
-                                key=f"download_{i}"
+                                key=f"download_{model_choice}_{i}"
                             )
                             
                             os.unlink(tmp_file.name)
         else:
-            st.info("Train the advanced model first!")
+            st.info(f"Train the {model_choice} model first!")
     
-    st.header("Model Architecture")
+    # Model comparison section
+    st.header("🔍 Model Comparison")
+    
+    comparison_data = {
+        "Model": ["MusicVAE", "MusicTransformer", "MusicGAN", "MusicRNN", "MusicDiffusion"],
+        "Architecture": ["Variational Autoencoder", "Transformer", "Adversarial Network", "LSTM Network", "Diffusion Model"],
+        "Strengths": [
+            "Smooth interpolation, structured latent space",
+            "Long-range dependencies, attention mechanism", 
+            "Realistic generation, adversarial training",
+            "Sequential modeling, temporal patterns",
+            "High quality output, stable training"
+        ],
+        "Best For": [
+            "Style transfer, latent exploration",
+            "Complex compositions, harmony",
+            "Realistic textures, variety",
+            "Melody generation, rhythm",
+            "High-fidelity synthesis"
+        ]
+    }
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Architecture Details")
+        for i, model in enumerate(comparison_data["Model"]):
+            with st.expander(f"{model} Details"):
+                st.write(f"**Architecture:** {comparison_data['Architecture'][i]}")
+                st.write(f"**Strengths:** {comparison_data['Strengths'][i]}")
+                st.write(f"**Best For:** {comparison_data['Best For'][i]}")
+    
+    with col2:
+        st.subheader("Training Tips")
+        st.write("""
+        **MusicVAE**: 
+        - Higher latent dims for complex music
+        - Lower temperature for coherent output
+        
+        **MusicTransformer**:
+        - More attention heads for harmony
+        - Deeper layers for complexity
+        
+        **MusicGAN**:
+        - Balance generator/discriminator learning
+        - Higher noise dim for variety
+        
+        **MusicRNN**:
+        - More LSTM layers for long sequences
+        - Bidirectional for better context
+        
+        **MusicDiffusion**:
+        - More timesteps for quality
+        - Longer training for best results
+        """)
+    
+    st.header("🎼 About This App")
     st.write("""
-    **Improvements:**
-    - Hierarchical encoder/decoder with residual connections
-    - Batch normalization and dropout for stability
-    - Beta-VAE with annealing for better disentanglement
-    - Diverse training data with 5 musical styles
-    - Temperature-controlled generation
-    - Enhanced audio synthesis with harmonics
-    - Gradient clipping and learning rate scheduling
+    This multi-model music generator implements 5 different AI architectures:
+    
+    1. **MusicVAE**: Learns a continuous latent space for smooth music interpolation
+    2. **MusicTransformer**: Uses self-attention to capture musical structure and harmony
+    3. **MusicGAN**: Adversarial training for realistic and diverse music generation
+    4. **MusicRNN**: Sequential modeling with LSTM for temporal music patterns
+    5. **MusicDiffusion**: Iterative denoising for high-quality music synthesis
+    
+    Each model has unique strengths and is suitable for different musical styles and applications.
+    Train multiple models to compare their outputs and find your preferred approach!
     """)
 
 if __name__ == "__main__":
