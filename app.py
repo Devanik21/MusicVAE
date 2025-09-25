@@ -186,8 +186,8 @@ class MusicDiffusion(nn.Module):
         
     def forward_diffusion(self, x, t):
         noise = torch.randn_like(x)
-        sqrt_alphas_cumprod = torch.sqrt(self.alphas_cumprod[t])
-        sqrt_one_minus_alphas_cumprod = torch.sqrt(1.0 - self.alphas_cumprod[t])
+        sqrt_alphas_cumprod = torch.sqrt(self.alphas_cumprod[t]).unsqueeze(-1)
+        sqrt_one_minus_alphas_cumprod = torch.sqrt(1.0 - self.alphas_cumprod[t]).unsqueeze(-1)
         
         return (sqrt_alphas_cumprod * x + sqrt_one_minus_alphas_cumprod * noise), noise
     
