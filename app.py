@@ -12,6 +12,8 @@ from scipy.io.wavfile import write
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+st.set_page_config(page_title=" Multi-Model Music Generator", page_icon="🎵", layout="wide")
+
 # ===== MODEL 1: MusicVAE =====
 class MusicVAE(nn.Module):
     def __init__(self, input_dim=128, hidden_dim=512, latent_dim=64, num_layers=3):
