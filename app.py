@@ -102,7 +102,8 @@ class MusicTransformer(nn.Module):
         self.output_proj = nn.Linear(d_model, input_dim)
         
     def encode(self, x):
-        x = self.input_proj(x.unsqueeze(1)) + self.pos_encoding
+        batch_size = x.shape[0]
+        x = self.input_proj(x.unsqueeze(-1)) + self.pos_encoding[:, :x.shape[1], :]
         x = self.transformer_encoder(x.transpose(0, 1))
         x = x.mean(dim=0)  # Global average pooling
         latent_params = self.latent_proj(x)
@@ -110,13 +111,15 @@ class MusicTransformer(nn.Module):
         return mu, logvar
         
     def decode(self, z):
+        batch_size = z.shape[0]
         z = self.decoder_proj(z).unsqueeze(1).repeat(1, 128, 1)
         z = z.transpose(0, 1)
         memory = z
         tgt = torch.zeros_like(z)
         x = self.transformer_decoder(tgt, memory)
-        x = x.transpose(0, 1).squeeze(1)
-        return torch.sigmoid(self.output_proj(x))
+        x = x.transpose(0, 1)  # [batch, seq, features]
+        x = self.output_proj(x)  # [batch, seq, input_dim]
+        return torch.sigmoid(x.view(batch_size, -1))
         
     def reparameterize(self, mu, logvar):
         std = torch.exp(0.5 * logvar)
@@ -126,7 +129,8 @@ class MusicTransformer(nn.Module):
     def forward(self, x):
         mu, logvar = self.encode(x)
         z = self.reparameterize(mu, logvar)
-        return self.decode(z), mu, logvar
+        decoded = self.decode(z)
+        return decoded, mu, logvar
 
 # ===== MODEL 3: Music GAN =====
 class MusicGenerator(nn.Module):
