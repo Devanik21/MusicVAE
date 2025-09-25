@@ -485,7 +485,7 @@ def main():
         timesteps = st.sidebar.slider("Diffusion Steps", 100, 1000, 500)
     
     hidden_dim = st.sidebar.slider("Hidden Dimension", 128, 512, 256)
-    epochs = st.sidebar.slider("Training Epochs", 30, 150, 80)
+    epochs = st.sidebar.slider("Training Epochs", 10, 450, 80)
     
     # Initialize session state
     model_key = f'{model_choice.lower()}_model'
