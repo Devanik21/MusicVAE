@@ -1,0 +1,3 @@
+model:
+  type: gan
+  noise_dim: 100

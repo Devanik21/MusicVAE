@@ -1,0 +1,3 @@
+model:
+  type: vae
+  beta: 0.5

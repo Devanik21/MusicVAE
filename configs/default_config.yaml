@@ -1,0 +1,7 @@
+model:
+  latent_dim: 256
+  hidden_dim: 512
+training:
+  batch_size: 64
+  learning_rate: 0.001
+  epochs: 100
