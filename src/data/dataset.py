@@ -9,4 +9,4 @@ class MidiDataset(Dataset):
     def __len__(self):
         return 0
     def __getitem__(self, idx):
-        return None
+        raise NotImplementedError("Dataset indexing not implemented.")
